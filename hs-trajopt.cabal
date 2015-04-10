@@ -66,15 +66,18 @@ library
 
   -- Base language which the package is written in.
   default-language:    Haskell2010
+  ghc-options: -auto-all -caf-all
 
 Test-Suite qp-test
   type:  exitcode-stdio-1.0
   main-is: QP.hs
   hs-source-dirs: app-src/test
   build-depends: base >=4.7 && <4.8
+               , hs-trajopt
                , hmatrix
                , hmatrix-quadprogpp
                , test-framework
                , test-framework-hunit
                , HUnit
+  ghc-options: -auto-all -caf-all
   default-language: Haskell2010
