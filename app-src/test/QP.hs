@@ -53,17 +53,18 @@ sqpTest =
                         -8.22222222222222)
       xError = norm_2 $ xTrue - xResult
       fError = abs $ fTrue - fResult
-  in  (xError < 1e-8, fError < 1e-8) @=? (True, True)
+  in  (xError < 1e-8, fError < 1e-8) @?= (True, True)
 
 rosenbrockTest :: Assertion
 rosenbrockTest =
+  -- From: http://www.mathworks.com/help/optim/ug/constrained-nonlinear-optimization-algorithms.html#f26633
   let f [x, y] = (1 - x)^(2 :: Int) + 100*(y - x^(2 :: Int))^(2 :: Int)
       cost x = let xL = toList x in f xL
       convexCost x = let xL = toList x
                          f' = fromList $ grad f xL
                          f'' = fromLists $ hessian f xL
-                         c  = f xL - (x `dot` f') + (x `dot` (f'' #> x))
-                     in  ( f'', f', c)
+                         c  = f xL - (x `dot` f') + 0.5 * (x `dot` (f'' #> x))
+                     in  ( f'', f' - (f'' #> x), c)
       g [x, y] = x^(2 :: Int) + y^(2 :: Int) - 1.5
       ineqs x = let xL = toList x in vector [g xL]
       convexIneqs x = let xL = toList x
@@ -79,8 +80,10 @@ rosenbrockTest =
                 }
       (xResult, fResult) = optimize problem (vector [(-1.9), 2.0])
       (xTrue, fTrue) = (vector [0.9072, 0.8228],
-                        267.62)
-  in  (xResult, fResult) @=? (xTrue, fTrue)
+                        0.00861632761)
+      xError = norm_2 $ xTrue - xResult
+      fError = abs $ fTrue - fResult
+  in  (xError < 1e-4, fError < 1e-4) @?= (True, True)
 
 main = defaultMain tests
   where tests = [ testCase "qp-test" qpTest

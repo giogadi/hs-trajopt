@@ -158,7 +158,8 @@ trustRegionStep
         trueImprove = oldTrueMerit - trueMerit
         modelImprove = oldTrueMerit - modelMerit
     in  if modelImprove < 0.0
-        then error $ "Model improvement got worse: " ++ show modelImprove
+        then error $ "Model improvement got worse: " ++
+               show (modelImprove, modelMerit, oldTrueMerit, trueMerit)
         else
           if trustSize < minTrustSize ||
              modelImprove < minModelImprove ||
@@ -193,11 +194,15 @@ solveQuadraticSubproblem
   let numIneqs = _numIneqs problem
       numVariables = _numVariables problem
 
-      augmentedCostMatrix =
+      costMatrixWithSlacks =
         diagBlock [ costMatrix
-                  , konst 0.0 (numIneqs, numIneqs)] +
-        -- regularization to make cost matrix positive definite
-        diagl (replicate (numVariables + numIneqs) 1e-10)
+                  , konst 0.0 (numIneqs, numIneqs)]
+
+      -- LET'S MAKE COST SPD BICTH
+      (l, v) = eigSH costMatrixWithSlacks
+      positiveEigVals = cmap (max 1e-12) l
+      augmentedCostMatrix = v <> diag positiveEigVals <> tr v
+
       augmentedCostVector = vjoin [costVector, konst 1.0 numIneqs]
 
       augmentedIneqMatrix =
@@ -218,7 +223,6 @@ solveQuadraticSubproblem
 
       -- inequalities are given as ax + b <= 0, but quadprog++ wants
       -- a'x + b' >= 0
-      debugStr = show augmentedCostMatrix ++ "\n" ++ show augmentedCostVector ++ "\n" ++ show ineqMatrixWithTrustConstraints ++ "\n" ++ show ineqVectorWithTrustConstraints
       result = solveQuadProg
         (augmentedCostMatrix, augmentedCostVector)
         Nothing $
@@ -240,6 +244,6 @@ solveQuadraticSubproblem
 
               -- DEBUG
               meritError = abs $ newMerit - meritNoReg
-          in  if meritError > 0.00001
+          in  if meritError / (abs meritNoReg) > 0.01
               then error $ "merits don't match!" ++ show (meritNoReg, newMerit)
               else (xNew, meritNoReg + costConstant)
