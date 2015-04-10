@@ -9,7 +9,9 @@ import Numeric.Minimization.QuadProgPP
 import Debug.Trace
 
 data Problem = Problem
-               { _cost :: (Matrix Double, Vector Double)
+               { _cost :: Vector Double -> Double
+               , _approxCost :: Vector Double
+                             -> (Matrix Double, Vector Double, Double)
                , _trueIneqs :: Vector Double -> Vector Double
                , _approxAffineIneqs :: Vector Double
                                     -> (Matrix Double, Vector Double)
@@ -50,9 +52,7 @@ initPenalty = 10
 
 evalMerit :: Problem -> Double -> Vector Double -> Double
 evalMerit problem penaltyParam x =
-  let (costMatrix, costVector) = _cost problem
-      -- cost(x) = x'Ax + x'b = x'(Ax + b)
-      cost = x `dot` ((0.5 * (costMatrix #> x)) + costVector)
+  let cost = _cost problem x
       penalty =
         penaltyParam * sum (map (max 0.0) $ toList $ _trueIneqs problem x)
   in  cost + penalty
@@ -91,8 +91,9 @@ reconvexify :: Problem
             -- xNew, newTrueMerit, newTrustSize
             -> (Vector Double, Double, Double)
 reconvexify problem x oldTrueMerit trustSize penaltyParam =
-  let (convexIneqMat, convexIneqVec) = _approxAffineIneqs problem x
-      trustResult = findSuitableTrustStep problem x
+  let convexCost = _approxCost problem x
+      (convexIneqMat, convexIneqVec) = _approxAffineIneqs problem x
+      trustResult = findSuitableTrustStep problem x convexCost
                       (convexIneqMat, convexIneqVec) oldTrueMerit trustSize
                       penaltyParam
   in  case trustResult of
@@ -107,6 +108,8 @@ data TrustStepResult = -- x merit trustSize
 
 findSuitableTrustStep :: Problem
                       -> Vector Double -- x
+                      -- convexified cost
+                      -> (Matrix Double, Vector Double, Double)
                       -- convexified inequality constraints
                       -> (Matrix Double, Vector Double)
                       -> Double -- old true merit
@@ -115,13 +118,13 @@ findSuitableTrustStep :: Problem
                       -- xNew, newTrueMerit, newTrustSize
                       -> TrustStepResult
 findSuitableTrustStep
-  problem x (ineqMat, ineqVec) oldTrueMerit trustSize penaltyParam =
+  problem x convexCost convexIneq oldTrueMerit trustSize penaltyParam =
   let trustStep =
-        trustRegionStep problem x (ineqMat, ineqVec) oldTrueMerit
+        trustRegionStep problem x convexCost convexIneq oldTrueMerit
           trustSize penaltyParam
   in  case trustStep of
         Reject -> let newTrustSize = trustSize * trustShrinkFactor
-                  in  findSuitableTrustStep problem x (ineqMat, ineqVec)
+                  in  findSuitableTrustStep problem x convexCost convexIneq
                         oldTrueMerit newTrustSize penaltyParam
         Accept xNew newTrueMerit ->
           let newTrustSize = trustSize * trustExpandFactor
@@ -139,6 +142,8 @@ data IterationResult = Reject
 
 trustRegionStep :: Problem
                 -> Vector Double -- x
+                -- convexified cost
+                -> (Matrix Double, Vector Double, Double)
                 -- convexified inequality constraints
                 -> (Matrix Double, Vector Double)
                 -> Double -- old true merit
@@ -146,9 +151,9 @@ trustRegionStep :: Problem
                 -> Double -- constraint penalty parameter
                 -> IterationResult
 trustRegionStep
-  problem x (ineqMat, ineqVec) oldTrueMerit trustSize penaltyParam =
+  problem x convexCost convexIneq oldTrueMerit trustSize penaltyParam =
     let (xNew, modelMerit) = solveQuadraticSubproblem problem x
-                              (ineqMat, ineqVec) trustSize penaltyParam
+                              convexCost convexIneq trustSize penaltyParam
         trueMerit = evalMerit problem penaltyParam xNew
         trueImprove = oldTrueMerit - trueMerit
         modelImprove = oldTrueMerit - modelMerit
@@ -167,13 +172,16 @@ trustRegionStep
 
 solveQuadraticSubproblem :: Problem
                          -> Vector Double
+                         -- convex cost
+                         -> (Matrix Double, Vector Double, Double)
                          -- convexified inequality constraints
                          -> (Matrix Double, Vector Double)
                          -> Double -- trust region size
                          -> Double -- constraint penalty parameter
                          -> (Vector Double, Double) -- new x, model merit
 solveQuadraticSubproblem
-  problem x (approxIneqMatrix, approxIneqVector) trustSize penaltyParam =
+  problem x (costMatrix, costVector, costConstant)
+  (approxIneqMatrix, approxIneqVector) trustSize penaltyParam =
   -- We approximate each nonlinear inequality as |ax + b|^+. For each
   -- of these, we introduce a new optimization variable t (i.e., a
   -- slack variable) that comes with two inequalities:
@@ -185,7 +193,6 @@ solveQuadraticSubproblem
   let numIneqs = _numIneqs problem
       numVariables = _numVariables problem
 
-      (costMatrix, costVector) = _cost problem
       augmentedCostMatrix =
         diagBlock [ costMatrix
                   , konst 0.0 (numIneqs, numIneqs)] +
@@ -235,4 +242,4 @@ solveQuadraticSubproblem
               meritError = abs $ newMerit - meritNoReg
           in  if meritError > 0.00001
               then error $ "merits don't match!" ++ show (meritNoReg, newMerit)
-              else (xNew, meritNoReg)
+              else (xNew, meritNoReg + costConstant)
