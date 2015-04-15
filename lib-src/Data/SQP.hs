@@ -80,8 +80,9 @@ findSuitableConstraintPenalty problem x merit trustSize penaltyParam =
   in  if constraintsSatisfied
       then (xNew, trueMerit)
       else let penalty' = penaltyParam * constraintPenaltyScalingFactor
+               updatedMerit = evalMerit problem penalty' xNew
            in  findSuitableConstraintPenalty
-                 problem xNew merit newTrustSize penalty'
+                 problem xNew updatedMerit newTrustSize penalty'
 
 reconvexify :: Problem
             -> Vector Double -- x
@@ -105,6 +106,7 @@ reconvexify problem x oldTrueMerit trustSize penaltyParam =
 data TrustStepResult = -- x merit trustSize
                        Reconvexify (Vector Double) Double Double
                      | Finished (Vector Double) Double Double
+  deriving (Show)
 
 findSuitableTrustStep :: Problem
                       -> Vector Double -- x
@@ -157,7 +159,7 @@ trustRegionStep
         trueMerit = evalMerit problem penaltyParam xNew
         trueImprove = oldTrueMerit - trueMerit
         modelImprove = oldTrueMerit - modelMerit
-    in  if modelImprove < 0.0
+    in  if modelImprove < -1e-6
         then error $ "Model improvement got worse: " ++
                show (modelImprove, modelMerit, oldTrueMerit, trueMerit)
         else
@@ -166,7 +168,7 @@ trustRegionStep
              modelImprove / oldTrueMerit < minModelImproveRatio
           then Converged x oldTrueMerit
           else
-            if trueImprove < 0.0 ||
+            if trueImprove > 0.0 ||
                trueImprove / modelImprove > stepAcceptanceThreshold
             then Accept xNew trueMerit
             else Reject

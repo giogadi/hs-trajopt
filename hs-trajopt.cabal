@@ -82,3 +82,20 @@ Test-Suite qp-test
                , ad
   ghc-options: -auto-all -caf-all
   default-language: Haskell2010
+
+Test-Suite robot-2d-test
+  type:  exitcode-stdio-1.0
+  main-is: Robot2D.hs
+  hs-source-dirs: app-src/test
+  build-depends: base >=4.7 && <4.8
+               , hs-trajopt
+               , hs-collision-2d
+               , linear
+               , hmatrix
+               , hmatrix-quadprogpp
+               , test-framework
+               , test-framework-hunit
+               , HUnit
+               , ad
+  ghc-options: -auto-all -caf-all
+  default-language: Haskell2010
