@@ -4,6 +4,7 @@ import Test.Framework
 import Test.Framework.Providers.HUnit
 
 import qualified Linear.V2 as V
+import Numeric.AD
 import Numeric.LinearAlgebra.HMatrix
 
 import Data.SQP
@@ -33,21 +34,22 @@ costMatrix numInternalStates
           belowDiag =
             map (\ix -> ((ix + 2, ix), (-1))) $
               take (2 * (numInternalStates - 1)) [0..]
-      in  diagl mainDiag +
+      in  diagBlock [diagl mainDiag +
             assoc (2 * numInternalStates, 2 * numInternalStates) 0
-              (aboveDiag ++ belowDiag)
+              (aboveDiag ++ belowDiag), matrix 1 [0]]
 
 cost :: Vector Double -> Double
-cost statesV =
-  let states = startState : vectorToPath statesV ++ [goalState]
+cost pathV =
+  let (internalStates, _) = vectorToPath pathV
+      states = startState : internalStates ++ [goalState]
       squaredDists = zipWith (\x x' -> let dx = x - x' in dot dx dx)
         states $ tail states
   in  0.5 * sum squaredDists
 
 approxCost :: Vector Double -> (Matrix Double, Vector Double, Double)
 approxCost _ = ( costMatrix internalPathLength
-               , vjoin [negate startState, konst 0.0 (2 * (internalPathLength - 1))] +
-                 vjoin [konst 0.0 (2 * (internalPathLength - 1)), negate goalState]
+               , vjoin [(vjoin [negate startState, konst 0.0 (2 * (internalPathLength - 1))] +
+                 vjoin [konst 0.0 (2 * (internalPathLength - 1)), negate goalState]), vector [0]]
                , 0.5 * (dot startState startState + dot goalState goalState) )
 
 costTest :: Assertion
@@ -60,19 +62,21 @@ costTest =
 
 type State2D = Vector Double
 
-pathToVector :: [State2D] -> Vector Double
-pathToVector = vjoin
+pathToVector :: [State2D] -> Double -> Vector Double
+pathToVector states stepSize = vjoin $ states ++ [vector [stepSize]]
 
-vectorToPath :: Vector Double -> [State2D]
-vectorToPath = takesV $ replicate internalPathLength 2
+vectorToPath :: Vector Double -> ([State2D], Double)
+vectorToPath pathV = ( takesV (replicate internalPathLength 2) pathV
+                     , pathV ! (2 * internalPathLength) )
 
 obstacleRadius :: Double
 obstacleRadius = 0.5
 
 obstaclePosition :: Vector Double
-obstaclePosition = vector [0.01, 0.01]
+--obstaclePosition = vector [1, 1]
+obstaclePosition = vector [0.001, 0.001]
 
-signedDistance :: Vector Double -> (Double, Vector Double)
+signedDistance :: State2D -> (Double, Vector Double)
 signedDistance p =
   let dp = p - obstaclePosition
       dpNorm = norm_2 dp
@@ -80,22 +84,53 @@ signedDistance p =
   in  (signedDist, dp / scalar dpNorm)
 
 ineqs :: Vector Double -> Vector Double
-ineqs statesV =
-  let states = vectorToPath statesV
-  in  fromList $ map (negate . fst . signedDistance) states
+ineqs pathV =
+  let (states, stepSize) = vectorToPath pathV
+      collisionIneqs = map (negate . fst . signedDistance) states
+      boundIneqs = negate stepSize
+  in  fromList $ collisionIneqs ++ [boundIneqs]
 
 approxIneqs :: Vector Double -> (Matrix Double, Vector Double)
-approxIneqs statesV =
-  let states = vectorToPath statesV
+approxIneqs pathV =
+  let (states, _) = vectorToPath pathV
       (dists, normals) = unzip $ map signedDistance states
       assocList =
         concatMap (\(ix, n) -> [ ((ix, 2 * ix), negate $ n ! 0)
                                , ((ix, 2 * ix + 1), negate $ n ! 1)]) $
           zip [0..] normals
-      ineqMat = assoc (internalPathLength, 2 * internalPathLength) 0 assocList
+      ineqMat = diagBlock
+        [ assoc (internalPathLength, 2 * internalPathLength) 0 assocList
+        , matrix 1 [(-1)] ]
       affine =
-        fromList $ zipWith (+) (map negate dists) $ zipWith dot states normals
+        fromList $ (zipWith (+) (map negate dists) $ zipWith dot states normals)
+          ++ [0]
   in  (ineqMat, affine)
+
+unconcat :: [Int] -> [a] -> [[a]]
+unconcat [] [] = []
+unconcat _ [] = []
+unconcat (n : ns) xs = let (xh, xt) = splitAt n xs
+                       in  xh : unconcat ns xt
+
+eqsL pathL =
+  let stepSize = last pathL
+      internalStatesFlat = take (2 * internalPathLength) pathL
+      internalStates = unconcat (repeat 2) internalStatesFlat
+      states = (map auto $ toList startState) : internalStates ++ [map auto $ toList goalState]
+      dist2 s s' = sum $ map (^ (2 :: Int)) $ zipWith (-) s s'
+      squaredDists = zipWith dist2 states $ tail states
+      stepSizeSqrd = stepSize * stepSize
+  in  map (\d2 -> d2 - stepSizeSqrd) squaredDists
+
+eqs :: Vector Double -> Vector Double
+eqs pathV =
+  vector $ eqsL $ toList pathV
+
+approxEqs :: Vector Double -> (Matrix Double, Vector Double)
+approxEqs pathV =
+  let f = fromList $ eqsL $ toList pathV
+      f' = fromLists $ jacobian eqsL $ toList pathV
+  in  ( f', f - (f' #> pathV) )
 
 -- robotSquare :: State2D -> Polygon
 -- robotSquare state =
@@ -141,14 +176,21 @@ planningTest =
                 , _approxCost = approxCost
                 , _trueIneqs = ineqs
                 , _approxAffineIneqs = approxIneqs
-                , _numVariables = 2 * internalPathLength
-                , _numIneqs = internalPathLength
+                , _eqs = eqs
+                , _approxEqs = approxEqs
+                , _numVariables = 2 * internalPathLength + 1
+                , _numIneqs = internalPathLength + 1
+                , _numEqs = internalPathLength + 1
                 }
-      initPath =
-        map (\t -> startState + scalar (fromIntegral t / fromIntegral (internalPathLength + 1)) *
-              (goalState - startState))
-          [1..internalPathLength]
-      (xResult, fResult) = optimize problem $ pathToVector initPath
+      -- initPathStates =
+      --   map (\t -> startState + scalar (fromIntegral t / fromIntegral (internalPathLength + 1)) *
+      --         (goalState - startState))
+      --     [1..internalPathLength]
+      initPathStates = [vector [0, 0.0001]]
+      shortestPathLength = norm_2 $ goalState - startState
+      initPathVec = pathToVector initPathStates $
+       shortestPathLength / fromIntegral (internalPathLength + 1)
+      (xResult, fResult) = optimize problem initPathVec
       (xTrue, fTrue) = ((-50), (-50)) -- whatever
   in  (xResult, fResult) @?= (xTrue, fTrue)
 
