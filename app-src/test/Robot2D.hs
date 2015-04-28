@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-}
+
 import qualified Data.Foldable as F
 import Test.HUnit
 import Test.Framework
@@ -9,8 +11,6 @@ import Numeric.LinearAlgebra.HMatrix
 
 import Data.SQP
 
---import Data.Collision
-
 import Debug.Trace
 
 startState :: State2D
@@ -20,7 +20,7 @@ goalState :: State2D
 goalState = vector [1, 1]
 
 internalPathLength :: Int
-internalPathLength = 1
+internalPathLength = 10
 
 costMatrix :: Int -> Matrix Double
 costMatrix numInternalStates
@@ -73,7 +73,6 @@ obstacleRadius :: Double
 obstacleRadius = 0.5
 
 obstaclePosition :: Vector Double
---obstaclePosition = vector [1, 1]
 obstaclePosition = vector [0.001, 0.001]
 
 signedDistance :: State2D -> (Double, Vector Double)
@@ -112,6 +111,7 @@ unconcat _ [] = []
 unconcat (n : ns) xs = let (xh, xt) = splitAt n xs
                        in  xh : unconcat ns xt
 
+eqsL :: (Mode a, Scalar a ~ Double) => [a] -> [a]
 eqsL pathL =
   let stepSize = last pathL
       internalStatesFlat = take (2 * internalPathLength) pathL
@@ -132,43 +132,6 @@ approxEqs pathV =
       f' = fromLists $ jacobian eqsL $ toList pathV
   in  ( f', f - (f' #> pathV) )
 
--- robotSquare :: State2D -> Polygon
--- robotSquare state =
---   let [x, y] = toList state
---       points = [V.V2 1 1, V.V2 (-1) 1, V.V2 (-1) (-1), V.V2 1 (-1)]
---   in  map (+ V.V2 x y) points
-
--- obstacle :: Polygon
--- obstacle = [V.V2 5 5, V.V2 (-5) 5, V.V2 (-5) (-5), V.V2 5 (-5)]
-
--- ineqs :: Vector Double -> Vector Double
--- ineqs statesV =
---   let states = vectorToPath statesV
---   in  fromList $
---         map (negate . fst . (`signedDistance` obstacle) . robotSquare) states
-
--- approxIneqs :: Vector Double -> (Matrix Double, Vector Double)
--- approxIneqs statesV =
---   let states = vectorToPath statesV
---       (dists, normals) = unzip $
---         map ((`signedDistance` obstacle) . robotSquare) states
---       assocList = concatMap (\(ix, V.V2 nx ny) -> [ ((ix, 2 * ix), nx)
---                                                 , ((ix, 2 * ix + 1), ny) ]) $
---                     zip [0..] normals
---       ineqMat = assoc (internalPathLength, 2 * internalPathLength) 0 assocList
---       normalsVecs = map (fromList . F.toList) normals
---       affine =
---         negate $ fromList $ zipWith (+) dists $ zipWith dot normalsVecs states
---   in  (ineqMat, affine)
-
--- ineqsTest :: Assertion
--- ineqsTest =
---   let statesV = pathToVector $ replicate internalPathLength $ vector [(-7), 0]
---       (ineqsMat, ineqsVec) = approxIneqs statesV
---       ineqPenalty = (ineqsMat #> statesV) + ineqsVec
---   in  (ineqPenalty, ineqs statesV) @?=
---         (konst (-1.0) internalPathLength, konst (-1.0) internalPathLength)
-
 planningTest :: Assertion
 planningTest =
   let problem = Problem
@@ -182,13 +145,13 @@ planningTest =
                 , _numIneqs = internalPathLength + 1
                 , _numEqs = internalPathLength + 1
                 }
-      -- initPathStates =
-      --   map (\t -> startState + scalar (fromIntegral t / fromIntegral (internalPathLength + 1)) *
-      --         (goalState - startState))
-      --     [1..internalPathLength]
-      initPathStates = [vector [0, 0.0001]]
+      initPathStates =
+        map (\t -> startState + scalar (fromIntegral t / fromIntegral (internalPathLength + 1)) *
+              (goalState - startState))
+          [1..internalPathLength]
+      initPathStatesPerturbed = map (+ vector [0.0, 0.0001]) initPathStates
       shortestPathLength = norm_2 $ goalState - startState
-      initPathVec = pathToVector initPathStates $
+      initPathVec = pathToVector initPathStatesPerturbed $
        shortestPathLength / fromIntegral (internalPathLength + 1)
       (xResult, fResult) = optimize problem initPathVec
       (xTrue, fTrue) = ((-50), (-50)) -- whatever

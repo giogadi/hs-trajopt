@@ -64,21 +64,17 @@ optimize :: Problem
          -> Vector Double -- xInitial
          -> (Vector Double, Double)
 optimize problem xInit =
-  let
-      meritInit = evalMerit problem initPenalty xInit
-  in  findSuitableConstraintPenalty
-        problem xInit meritInit initTrustSize initPenalty
+  findSuitableConstraintPenalty problem xInit initTrustSize initPenalty
 
 findSuitableConstraintPenalty :: Problem
                               -> Vector Double -- x
-                              -> Double -- old merit
                               -> Double -- trust region size
                               -> Double -- constraint penalty
                               -- xNew, trueMerit
                               -> (Vector Double, Double)
-findSuitableConstraintPenalty problem x merit trustSize penaltyParam =
+findSuitableConstraintPenalty problem x trustSize penaltyParam =
   let (xNew, trueMerit, newTrustSize) =
-        reconvexify problem x merit trustSize penaltyParam
+        reconvexify problem x trustSize penaltyParam
       ineqsSatisfied = all (<= constraintSatisfactionThreshold) $
                          toList $ _trueIneqs problem xNew
       eqsSatisfied = all ((<= constraintSatisfactionThreshold) . abs) $
@@ -87,9 +83,8 @@ findSuitableConstraintPenalty problem x merit trustSize penaltyParam =
   in  if constraintsSatisfied
       then (xNew, trueMerit)
       else let penalty' = penaltyParam * constraintPenaltyScalingFactor
-               updatedMerit = evalMerit problem penalty' xNew
            in  findSuitableConstraintPenalty
-                 problem xNew updatedMerit newTrustSize penalty'
+                 problem xNew newTrustSize penalty'
 
 evalQuadratic :: (Matrix Double, Vector Double, Double)
               -> Vector Double
@@ -104,21 +99,21 @@ evalLinear (m, b) x = (m #> x) + b
 
 reconvexify :: Problem
             -> Vector Double -- x
-            -> Double -- old true merit
             -> Double -- trust region size
             -> Double -- constraint penalty
             -- xNew, newTrueMerit, newTrustSize
             -> (Vector Double, Double, Double)
-reconvexify problem x oldTrueMerit trustSize penaltyParam =
+reconvexify problem x trustSize penaltyParam =
   let convexCost = _approxCost problem x
       convexIneqs = _approxAffineIneqs problem x
       convexEqs = _approxEqs problem x
+      trueMerit = evalMerit problem penaltyParam x
       trustResult = findSuitableTrustStep problem x convexCost
-                      convexIneqs convexEqs oldTrueMerit trustSize
+                      convexIneqs convexEqs trueMerit trustSize
                       penaltyParam
   in  case trustResult of
         Reconvexify xNew newMerit newTrustSize ->
-          reconvexify problem xNew newMerit newTrustSize penaltyParam
+          reconvexify problem xNew newTrustSize penaltyParam
         Finished xNew newMerit newTrustSize ->
           (xNew, newMerit, newTrustSize)
 
@@ -182,7 +177,7 @@ trustRegionStep
         trueMerit =  evalMerit problem penaltyParam xNew
         trueImprove = oldTrueMerit - trueMerit
         modelImprove = oldTrueMerit - modelMerit
-    in  if modelImprove < -1e-3
+    in  if modelImprove < -1e-2 -- why so high? our convexification?
         then error $ "Model improvement got worse: " ++
                show (modelImprove, modelMerit, oldTrueMerit, trueMerit)
         else
@@ -234,7 +229,7 @@ solveQuadraticSubproblem
                   , konst 0.0 (numIneqs, numIneqs)
                   , konst 0.0 (2 * numEqs, 2 * numEqs)]
 
-      -- LET'S MAKE COST SPD BICTH
+      -- LET'S MAKE COST SPD
       (l, v) = eigSH costMatrixWithSlacks
       positiveEigVals = cmap (max 1e-12) l
       augmentedCostMatrix = v <> diag positiveEigVals <> tr v
@@ -271,8 +266,7 @@ solveQuadraticSubproblem
 
       -- inequalities are given as ax + b <= 0, but quadprog++ wants
       -- a'x + b' >= 0
-      result = --trace (show (numVariables, numIneqs, numEqs, augmentedCostMatrix, augmentedCostVector, augmentedEqMatrix, augmentedEqVector, ineqMatrixWithTrustConstraints, ineqVectorWithTrustConstraints)) $
-               solveQuadProg
+      result = solveQuadProg
         (augmentedCostMatrix, augmentedCostVector)
         (Just (augmentedEqMatrix, augmentedEqVector)) $
         Just ((-ineqMatrixWithTrustConstraints),

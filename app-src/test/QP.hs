@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-}
+
 import Test.HUnit
 import Test.Framework
 import Test.Framework.Providers.HUnit
